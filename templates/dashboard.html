@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>DriveGuard - Drowsiness Monitoring</title>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+
+        body {
+            background: #0b1220;
+            color: white;
+            padding: 25px;
+        }
+
+        /* HEADER */
+
+        .header {
+            margin-bottom: 25px;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            letter-spacing: 2px;
+        }
+
+        .header p {
+            color: #94a3b8;
+            margin-top: 6px;
+            font-size: 17px;
+        }
+
+        /* MAIN GRID */
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+        }
+
+        /* CARD */
+
+        .card {
+            background: #111827;
+            border: 1px solid #263244;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .card h2 {
+            font-size: 20px;
+            margin-bottom: 18px;
+        }
+
+        /* CAMERA */
+
+        .camera {
+            width: 100%;
+            height: 350px;
+            background: #020617;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px dashed #334155;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #cameraFeed {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
+        }
+
+        #cameraMessage {
+            color: #64748b;
+            font-size: 18px;
+        }
+
+        /* CAMERA SELECT */
+
+        .cam-select-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .cam-select-row label {
+            color: #94a3b8;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+
+        #camSelect {
+            flex: 1;
+            padding: 10px 14px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            cursor: pointer;
+            outline: none;
+        }
+
+        #camSelect:focus {
+            border-color: #2563eb;
+        }
+
+        #refreshCamsBtn {
+            padding: 10px 14px;
+            width: auto;
+            margin-top: 0;
+            background: #1e293b;
+            font-size: 18px;
+            border-radius: 8px;
+        }
+
+        #refreshCamsBtn:hover {
+            background: #334155;
+        }
+
+        /* BUTTON */
+
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        button {
+            flex: 1;
+            padding: 15px;
+
+            border: none;
+            border-radius: 8px;
+
+            color: white;
+
+            font-size: 15px;
+            font-weight: bold;
+
+            cursor: pointer;
+        }
+
+        #startBtn {
+            background: #2563eb;
+        }
+
+        #startBtn:hover {
+            background: #1d4ed8;
+        }
+
+        #stopBtn {
+            background: #dc2626;
+        }
+
+        #stopBtn:hover {
+            background: #b91c1c;
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* STATUS */
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+
+            padding: 18px;
+            background: #0f172a;
+
+            border-radius: 8px;
+            margin-bottom: 18px;
+        }
+
+        .dot {
+            width: 16px;
+            height: 16px;
+
+            background: #6b7280;
+            border-radius: 50%;
+        }
+
+        .dot.active {
+            background: #22c55e;
+            animation: pulse 1.5s infinite;
+        }
+
+        .dot.danger {
+            background: #ef4444;
+            animation: pulse 0.8s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .status-text {
+            font-size: 21px;
+            font-weight: bold;
+        }
+
+        /* VALUE BOX */
+
+        .value-box {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .value {
+            background: #0f172a;
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        .value h3 {
+            color: #94a3b8;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .value p {
+            font-size: 29px;
+            font-weight: bold;
+        }
+
+        /* DETECTION RULE */
+
+        .alert-box {
+            margin-top: 20px;
+            padding: 18px;
+
+            border-radius: 8px;
+
+            background: #172033;
+
+            border-left: 5px solid #22c55e;
+        }
+
+        .alert-box.warning {
+            border-left-color: #f59e0b;
+        }
+
+        .alert-box.danger {
+            border-left-color: #ef4444;
+        }
+
+        .alert-box h3 {
+            margin-bottom: 8px;
+            font-size: 18px;
+        }
+
+        .alert-box p {
+            line-height: 1.5;
+            color: #e2e8f0;
+        }
+
+        /* RECORD TABLE */
+
+        .table-card {
+            margin-top: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 14px;
+
+            border-bottom: 1px solid #263244;
+        }
+
+        th {
+            color: #94a3b8;
+            font-size: 14px;
+        }
+
+        td {
+            font-size: 14px;
+        }
+
+        .safe {
+            color: #22c55e;
+        }
+
+        .warning {
+            color: #f59e0b;
+        }
+
+        .danger {
+            color: #ef4444;
+        }
+
+        /* RESPONSIVE */
+
+        @media (max-width: 850px) {
+
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+
+            .camera {
+                height: 300px;
+            }
+        }
+    </style>
+</head>
+
+
+<body>
+
+    <!-- HEADER -->
+
+    <div class="header">
+
+        <h1>DROWSINESS MONITORING</h1>
+
+        <p>
+            Driver Alertness Monitoring System
+        </p>
+
+    </div>
+
+
+    <!-- DASHBOARD -->
+
+    <div class="dashboard">
+
+
+        <!-- LIVE CAMERA -->
+
+        <div class="card">
+
+            <h2>Live Camera Feed</h2>
+
+            <div class="camera">
+
+                <img
+                    id="cameraFeed"
+                    alt="Live Camera Feed" />
+
+                <span id="cameraMessage">
+                    📷 Camera is OFF
+                </span>
+
+            </div>
+
+
+            <!-- CAMERA SELECT -->
+
+            <div class="cam-select-row">
+
+                <label>📷 Select Camera:</label>
+
+                <select id="camSelect">
+                    <option value="0">Camera 0 (Default)</option>
+                </select>
+
+                <button id="refreshCamsBtn" onclick="loadCameras()" title="Refresh camera list">
+                    🔄
+                </button>
+
+            </div>
+
+
+            <div class="btn-row">
+
+                <button id="startBtn" onclick="startMonitoring()">
+                    ▶ START MONITORING
+                </button>
+
+                <button id="stopBtn" onclick="stopMonitoring()" disabled>
+                    ⏹ STOP MONITORING
+                </button>
+
+            </div>
+
+        </div>
+
+
+
+        <!-- MONITORING STATUS -->
+
+        <div class="card">
+
+            <h2>Monitoring Status</h2>
+
+
+            <div class="status">
+
+                <div
+                    class="dot"
+                    id="statusDot">
+                </div>
+
+                <div
+                    class="status-text"
+                    id="status">
+
+                    READY
+
+                </div>
+
+            </div>
+
+
+            <!-- VALUES -->
+
+            <div class="value-box">
+
+
+                <div class="value">
+
+                    <h3>EAR VALUE</h3>
+
+                    <p id="ear">
+                        --
+                    </p>
+
+                </div>
+
+
+                <div class="value">
+
+                    <h3>CLOSED FRAMES</h3>
+
+                    <p id="frames">
+                        0
+                    </p>
+
+                </div>
+
+
+                <div class="value">
+
+                    <h3>TOTAL ALERTS</h3>
+
+                    <p id="alerts">
+                        0
+                    </p>
+
+                </div>
+
+
+                <div class="value">
+
+                    <h3>ALARM</h3>
+
+                    <p id="alarm">
+                        OFF
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <!-- DETECTION RULE -->
+
+            <div class="alert-box" id="alertBox">
+
+                <h3>
+                    Detection Rule
+                </h3>
+
+                <p>
+
+                    If EAR is below
+                    <b>0.3</b>
+                    continuously for
+                    <b>30 frames</b>,
+                    drowsiness alert is triggered.
+
+                </p>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+
+    <!-- RECENT DETECTION RECORDS -->
+
+    <div class="card table-card">
+
+        <h2>
+            Recent Detection Records
+        </h2>
+
+
+        <table>
+
+            <thead>
+
+                <tr>
+
+                    <th>Time</th>
+
+                    <th>EAR</th>
+
+                    <th>Closed Frames</th>
+
+                    <th>Eye Status</th>
+
+                    <th>Alert Type</th>
+
+                    <th>Alarm</th>
+
+                </tr>
+
+            </thead>
+
+
+            <tbody id="detectionTable">
+
+                <tr>
+                    <td colspan="6" style="color: #64748b; text-align: center;">
+                        No detection events yet. Start monitoring to begin.
+                    </td>
+                </tr>
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+
+
+    <!-- JAVASCRIPT -->
+
+    <script>
+
+        let pollingInterval = null;
+        let alarmPlaying = false;
+
+        /* Two alert sounds — picked randomly each time */
+        const alarmSounds = [
+            "/static/audio/mixkit-bell-notification-933.wav",
+            "/static/audio/mixkit-urgent-simple-tone-loop-2976.wav"
+        ];
+
+        let currentAlarm = null;
+
+        function playAlarmBeep() {
+            if (alarmPlaying) return;
+            alarmPlaying = true;
+
+            /* Pick a random sound */
+            const src = alarmSounds[Math.floor(Math.random() * alarmSounds.length)];
+
+            currentAlarm = new Audio(src);
+            currentAlarm.loop = true;       /* loop so it fills the full duration */
+            currentAlarm.volume = 1.0;
+            currentAlarm.play().catch(() => {});
+
+            /* Stop after 3–4 seconds (random) */
+            const duration = 3000 + Math.random() * 1000;
+
+            setTimeout(() => {
+                if (currentAlarm) {
+                    currentAlarm.pause();
+                    currentAlarm.currentTime = 0;
+                    currentAlarm = null;
+                }
+                alarmPlaying = false;
+            }, duration);
+        }
+
+
+
+        /* Load available cameras into dropdown */
+
+        async function loadCameras() {
+
+            const select = document.getElementById("camSelect");
+            const saved = select.value;
+
+            select.innerHTML = "<option disabled>Scanning...</option>";
+
+            try {
+
+                const res = await fetch("/cameras");
+                const cams = await res.json();
+
+                select.innerHTML = "";
+
+                if (cams.length === 0) {
+                    select.innerHTML = "<option value='0'>Camera 0 (Default)</option>";
+                } else {
+                    cams.forEach(cam => {
+                        const opt = document.createElement("option");
+                        opt.value = cam.index;
+                        opt.text = cam.label;
+                        if (cam.index == saved) opt.selected = true;
+                        select.appendChild(opt);
+                    });
+                }
+
+            } catch (e) {
+                select.innerHTML = "<option value='0'>Camera 0 (Default)</option>";
+            }
+
+        }
+
+        /* Auto-populate on page load */
+        window.addEventListener("load", loadCameras);
+
+
+        async function startMonitoring() {
+
+            try {
+
+                /* Tell the backend to start detection with selected camera */
+
+                const camIndex = parseInt(
+                    document.getElementById("camSelect").value || "0"
+                );
+
+                const response = await fetch("/start", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ cam_index: camIndex })
+                });
+
+                const data = await response.json();
+
+                if (!data.running) {
+                    alert("Failed to start monitoring.");
+                    return;
+                }
+
+
+                /* Show the MJPEG stream */
+
+                const feed =
+                    document.getElementById("cameraFeed");
+
+                const message =
+                    document.getElementById("cameraMessage");
+
+                feed.src = "/video_feed";
+                feed.style.display = "block";
+                message.style.display = "none";
+
+
+                /* Update buttons */
+
+                document.getElementById("startBtn").disabled = true;
+                document.getElementById("stopBtn").disabled = false;
+                document.getElementById("camSelect").disabled = true;
+                document.getElementById("refreshCamsBtn").disabled = true;
+
+
+                /* Change status */
+
+                document.getElementById("status")
+                    .innerText = "MONITORING";
+
+                document.getElementById("statusDot")
+                    .className = "dot active";
+
+
+                /* Start polling for status updates */
+
+                pollingInterval = setInterval(pollStatus, 500);
+
+            }
+
+            catch (error) {
+
+                console.error("Start Error:", error);
+
+                alert(
+                    "Could not start monitoring. Check the server console for errors."
+                );
+
+            }
+
+        }
+
+
+        async function stopMonitoring() {
+
+            try {
+
+                /* Tell the backend to stop */
+
+                await fetch("/stop", { method: "POST" });
+
+
+                /* Hide the feed */
+
+                const feed =
+                    document.getElementById("cameraFeed");
+
+                const message =
+                    document.getElementById("cameraMessage");
+
+                feed.src = "";
+                feed.style.display = "none";
+                message.style.display = "block";
+
+
+                /* Update buttons */
+
+                document.getElementById("startBtn").disabled = false;
+                document.getElementById("stopBtn").disabled = true;
+                document.getElementById("camSelect").disabled = false;
+                document.getElementById("refreshCamsBtn").disabled = false;
+
+
+                /* Change status */
+
+                document.getElementById("status")
+                    .innerText = "STOPPED";
+
+                document.getElementById("statusDot")
+                    .className = "dot";
+
+
+                /* Reset alert box */
+
+                document.getElementById("alertBox")
+                    .className = "alert-box";
+
+
+                /* Stop polling */
+
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                    pollingInterval = null;
+                }
+
+            }
+
+            catch (error) {
+                console.error("Stop Error:", error);
+            }
+
+        }
+
+
+        async function pollStatus() {
+
+            try {
+
+                const response = await fetch("/status");
+
+                const data = await response.json();
+
+
+                /* Update EAR */
+                document.getElementById("ear")
+                    .innerText = data.ear.toFixed(2);
+
+                /* Update Closed Frames */
+                document.getElementById("frames")
+                    .innerText = data.closed_frames;
+
+                /* Update Total Alerts */
+                document.getElementById("alerts")
+                    .innerText = data.total_alerts;
+
+                /* Update Alarm */
+                const alarmEl = document.getElementById("alarm");
+                alarmEl.innerText = data.alarm ? "ON" : "OFF";
+                alarmEl.style.color = data.alarm ? "#ef4444" : "white";
+
+
+                /* Update status indicator */
+                const statusDot = document.getElementById("statusDot");
+                const statusText = document.getElementById("status");
+                const alertBox = document.getElementById("alertBox");
+
+                if (data.drowsy) {
+
+                    statusDot.className = "dot danger";
+                    statusText.innerText = "DROWSY!";
+                    statusText.style.color = "#ef4444";
+                    alertBox.className = "alert-box danger";
+                    playAlarmBeep();
+
+                } else if (data.yawn) {
+
+                    statusDot.className = "dot danger";
+                    statusText.innerText = "YAWNING!";
+                    statusText.style.color = "#f59e0b";
+                    alertBox.className = "alert-box warning";
+                    playAlarmBeep();
+
+                } else if (data.running) {
+
+                    statusDot.className = "dot active";
+                    statusText.innerText = "MONITORING";
+                    statusText.style.color = "white";
+                    alertBox.className = "alert-box";
+
+                }
+
+
+                /* Update detection log table */
+
+                if (data.log && data.log.length > 0) {
+                    updateTable(data.log);
+                }
+
+            }
+
+            catch (error) {
+                console.error("Status poll error:", error);
+            }
+
+        }
+
+
+        function updateTable(log) {
+
+            const tbody =
+                document.getElementById("detectionTable");
+
+            let html = "";
+
+            for (const entry of log) {
+
+                const statusClass =
+                    entry.alert_type === "Drowsiness" ? "danger" :
+                    entry.alert_type === "Yawn" ? "warning" : "safe";
+
+                const eyeClass =
+                    entry.eye_status === "Closed" ? "danger" : "safe";
+
+                html += `
+                    <tr>
+                        <td>${entry.time}</td>
+                        <td>${entry.ear}</td>
+                        <td>${entry.closed_frames}</td>
+                        <td class="${eyeClass}">${entry.eye_status}</td>
+                        <td class="${statusClass}">${entry.alert_type}</td>
+                        <td>${entry.alarm}</td>
+                    </tr>
+                `;
+            }
+
+            tbody.innerHTML = html;
+
+        }
+
+    </script>
+
+</body>
+</html>

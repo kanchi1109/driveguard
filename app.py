@@ -1,0 +1,75 @@
+from flask import Flask, render_template, Response, jsonify, request
+import cv2
+from drawsiness_yawn import DrowsinessDetector
+
+app = Flask(__name__)
+
+# Create a single shared detector instance
+detector = DrowsinessDetector()
+
+
+@app.route("/")
+def home():
+    return render_template("dashboard.html")
+
+
+@app.route("/cameras")
+def list_cameras():
+    """Probe camera indices 0-4 and return available ones."""
+    available = []
+    for i in range(5):
+        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+        if cap.isOpened():
+            ret, _ = cap.read()
+            if ret:
+                available.append({"index": i, "label": f"Camera {i}"})
+            cap.release()
+    return jsonify(available)
+
+
+@app.route("/start", methods=["POST"])
+def start_monitoring():
+    """Start the drowsiness detection and camera."""
+    data = request.get_json(silent=True) or {}
+    cam_index = int(data.get("cam_index", 0))
+    detector.start(cam_index=cam_index)
+    return jsonify({"message": "Monitoring started", "running": True})
+
+
+@app.route("/stop", methods=["POST"])
+def stop_monitoring():
+    """Stop the drowsiness detection and release camera."""
+    detector.stop()
+    return jsonify({"message": "Monitoring stopped", "running": False})
+
+
+@app.route("/status")
+def status():
+    """Return current detection status as JSON."""
+    return jsonify(detector.get_status())
+
+
+def generate_frames():
+    """Generator that yields MJPEG frames for video streaming."""
+    while detector.running:
+        frame_bytes, _ = detector.process_frame()
+        if frame_bytes is not None:
+            yield (
+                b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' +
+                frame_bytes +
+                b'\r\n'
+            )
+
+
+@app.route("/video_feed")
+def video_feed():
+    """MJPEG video stream endpoint."""
+    return Response(
+        generate_frames(),
+        mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+if __name__ == "__main__":
+    app.run(debug=True, threaded=True)
