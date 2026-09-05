@@ -554,10 +554,325 @@
 
     <script>
 
-        let pollingInterval = null;
-        let alarmPlaying = false;
+        /* =============================================
+           STATE
+           ============================================= */
 
-        /* Two alert sounds — picked randomly each time */
+        let cameraStream   = null;   // MediaStream from getUserMedia
+        let browserVideo   = null;   // Hidden <video> element for capture
+        let captureCanvas  = null;   // Offscreen canvas for frame grab
+        let frameInterval  = null;   // setInterval handle for frame loop
+        let alarmPlaying   = false;
+        let currentAlarm   = null;
+        let isSending      = false;  // Prevent overlapping POSTs
+
+
+        /* =============================================
+           ALARM AUDIO  (2 random sounds, 3–4 sec)
+           ============================================= */
+
+        const alarmSounds = [
+            "/static/audio/mixkit-bell-notification-933.wav",
+            "/static/audio/mixkit-urgent-simple-tone-loop-2976.wav"
+        ];
+
+        function playAlarmBeep() {
+            if (alarmPlaying) return;
+            alarmPlaying = true;
+
+            const src = alarmSounds[Math.floor(Math.random() * alarmSounds.length)];
+            currentAlarm = new Audio(src);
+            currentAlarm.loop   = true;
+            currentAlarm.volume = 1.0;
+            currentAlarm.play().catch(() => {});
+
+            const duration = 3000 + Math.random() * 1000;
+            setTimeout(() => {
+                if (currentAlarm) {
+                    currentAlarm.pause();
+                    currentAlarm.currentTime = 0;
+                    currentAlarm = null;
+                }
+                alarmPlaying = false;
+            }, duration);
+        }
+
+
+        /* =============================================
+           CAMERA SELECT  (browser devices, not server)
+           ============================================= */
+
+        async function loadCameras() {
+
+            const select = document.getElementById("camSelect");
+            select.innerHTML = "<option disabled>Scanning...</option>";
+
+            try {
+
+                /* Enumerate the user's own browser cameras */
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoCams = devices.filter(d => d.kind === "videoinput");
+
+                select.innerHTML = "";
+
+                if (videoCams.length === 0) {
+                    select.innerHTML = "<option value=''>Default Camera</option>";
+                } else {
+                    videoCams.forEach((cam, i) => {
+                        const opt = document.createElement("option");
+                        opt.value = cam.deviceId;
+                        opt.text  = cam.label || `Camera ${i + 1}`;
+                        select.appendChild(opt);
+                    });
+                }
+
+            } catch (e) {
+                select.innerHTML = "<option value=''>Default Camera</option>";
+            }
+        }
+
+        window.addEventListener("load", loadCameras);
+
+
+        /* =============================================
+           START MONITORING
+           ============================================= */
+
+        async function startMonitoring() {
+
+            try {
+
+                /* Get the selected device ID from the dropdown */
+                const deviceId = document.getElementById("camSelect").value;
+                const videoConstraints = deviceId
+                    ? { deviceId: { exact: deviceId } }
+                    : true;
+
+                /* Open browser webcam */
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: videoConstraints,
+                    audio: false
+                });
+
+                /* Hidden video element to grab frames from */
+                browserVideo = document.createElement("video");
+                browserVideo.srcObject  = cameraStream;
+                browserVideo.autoplay   = true;
+                browserVideo.playsInline = true;
+                browserVideo.muted      = true;
+                browserVideo.style.display = "none";
+                document.body.appendChild(browserVideo);
+
+                /* Offscreen canvas for JPEG encoding */
+                captureCanvas = document.createElement("canvas");
+                captureCanvas.width  = 640;
+                captureCanvas.height = 360;
+
+                /* Show the <img> feed (will be filled by annotated frames) */
+                const feed    = document.getElementById("cameraFeed");
+                const message = document.getElementById("cameraMessage");
+                feed.style.display    = "block";
+                message.style.display = "none";
+
+                /* Update buttons & selector */
+                document.getElementById("startBtn").disabled         = true;
+                document.getElementById("stopBtn").disabled          = false;
+                document.getElementById("camSelect").disabled        = true;
+                document.getElementById("refreshCamsBtn").disabled   = true;
+
+                /* Update status indicator */
+                document.getElementById("status").innerText     = "MONITORING";
+                document.getElementById("statusDot").className  = "dot active";
+
+                /* Wait a moment for the video to start, then begin frame loop */
+                await new Promise(r => setTimeout(r, 600));
+                frameInterval = setInterval(captureAndProcess, 100);  /* 10 fps */
+
+            } catch (error) {
+                console.error("Camera Error:", error);
+                alert("Could not access your camera.\nPlease allow camera permission in your browser and try again.");
+            }
+        }
+
+
+        /* =============================================
+           FRAME CAPTURE & UPLOAD LOOP
+           ============================================= */
+
+        async function captureAndProcess() {
+
+            /* Skip if previous request is still in-flight or video isn't ready */
+            if (isSending || !browserVideo || browserVideo.readyState < 2) return;
+            isSending = true;
+
+            try {
+
+                /* Draw current video frame onto the offscreen canvas */
+                const ctx = captureCanvas.getContext("2d");
+                ctx.drawImage(browserVideo, 0, 0, captureCanvas.width, captureCanvas.height);
+
+                /* Encode as JPEG (quality 0.75 keeps upload size small) */
+                const frameData = captureCanvas.toDataURL("image/jpeg", 0.75);
+
+                /* POST to server for dlib detection */
+                const response = await fetch("/process_frame", {
+                    method:  "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body:    JSON.stringify({ frame: frameData })
+                });
+
+                const data = await response.json();
+
+                /* Display the annotated frame returned by the server */
+                if (data.frame) {
+                    document.getElementById("cameraFeed").src = data.frame;
+                }
+
+                /* Update all dashboard metrics from the status */
+                updateDashboard(data.status);
+
+            } catch (err) {
+                console.error("Frame processing error:", err);
+            } finally {
+                isSending = false;
+            }
+        }
+
+
+        /* =============================================
+           STOP MONITORING
+           ============================================= */
+
+        async function stopMonitoring() {
+
+            /* Stop the frame loop */
+            if (frameInterval) {
+                clearInterval(frameInterval);
+                frameInterval = null;
+            }
+
+            /* Release the browser camera */
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(t => t.stop());
+                cameraStream = null;
+            }
+
+            if (browserVideo) {
+                browserVideo.remove();
+                browserVideo = null;
+            }
+
+            /* Hide the feed */
+            const feed    = document.getElementById("cameraFeed");
+            const message = document.getElementById("cameraMessage");
+            feed.src              = "";
+            feed.style.display    = "none";
+            message.style.display = "block";
+
+            /* Restore buttons */
+            document.getElementById("startBtn").disabled       = false;
+            document.getElementById("stopBtn").disabled        = true;
+            document.getElementById("camSelect").disabled      = false;
+            document.getElementById("refreshCamsBtn").disabled = false;
+
+            /* Reset status */
+            const statusText = document.getElementById("status");
+            statusText.innerText    = "STOPPED";
+            statusText.style.color  = "white";
+            document.getElementById("statusDot").className = "dot";
+            document.getElementById("alertBox").className  = "alert-box";
+
+            /* Tell the server to clean up (optional — no-op if already stopped) */
+            await fetch("/stop", { method: "POST" }).catch(() => {});
+        }
+
+
+        /* =============================================
+           DASHBOARD UPDATE (status dict → UI)
+           ============================================= */
+
+        function updateDashboard(s) {
+
+            /* Metrics */
+            document.getElementById("ear").innerText    = (s.ear || 0).toFixed(2);
+            document.getElementById("frames").innerText = s.closed_frames || 0;
+            document.getElementById("alerts").innerText = s.total_alerts  || 0;
+
+            const alarmEl = document.getElementById("alarm");
+            alarmEl.innerText    = s.alarm ? "ON" : "OFF";
+            alarmEl.style.color  = s.alarm ? "#ef4444" : "white";
+
+            /* Status dot + alert box */
+            const statusDot  = document.getElementById("statusDot");
+            const statusText = document.getElementById("status");
+            const alertBox   = document.getElementById("alertBox");
+
+            if (s.drowsy) {
+                statusDot.className     = "dot danger";
+                statusText.innerText    = "DROWSY!";
+                statusText.style.color  = "#ef4444";
+                alertBox.className      = "alert-box danger";
+                playAlarmBeep();
+
+            } else if (s.yawn) {
+                statusDot.className     = "dot danger";
+                statusText.innerText    = "YAWNING!";
+                statusText.style.color  = "#f59e0b";
+                alertBox.className      = "alert-box warning";
+                playAlarmBeep();
+
+            } else {
+                statusDot.className     = "dot active";
+                statusText.innerText    = "MONITORING";
+                statusText.style.color  = "white";
+                alertBox.className      = "alert-box";
+            }
+
+            /* Detection log table */
+            if (s.log && s.log.length > 0) {
+                updateTable(s.log);
+            }
+        }
+
+
+        /* =============================================
+           DETECTION LOG TABLE
+           ============================================= */
+
+        function updateTable(log) {
+
+            const tbody = document.getElementById("detectionTable");
+            let html = "";
+
+            for (const entry of log) {
+
+                const statusClass =
+                    entry.alert_type === "Drowsiness" ? "danger" :
+                    entry.alert_type === "Yawn"       ? "warning" : "safe";
+
+                const eyeClass =
+                    entry.eye_status === "Closed" ? "danger" : "safe";
+
+                html += `
+                    <tr>
+                        <td>${entry.time}</td>
+                        <td>${entry.ear}</td>
+                        <td>${entry.closed_frames}</td>
+                        <td class="${eyeClass}">${entry.eye_status}</td>
+                        <td class="${statusClass}">${entry.alert_type}</td>
+                        <td>${entry.alarm}</td>
+                    </tr>
+                `;
+            }
+
+            tbody.innerHTML = html;
+        }
+
+    </script>
+
+</body>
+</html>
+
         const alarmSounds = [
             "/static/audio/mixkit-bell-notification-933.wav",
             "/static/audio/mixkit-urgent-simple-tone-loop-2976.wav"

@@ -130,21 +130,8 @@ class DrowsinessDetector:
         # Keep only the last 20 entries
         self.detection_log = self.detection_log[:20]
 
-    def process_frame(self):
-        """Process a single frame from the video stream.
-
-        Returns:
-            tuple: (annotated_frame_as_jpeg_bytes, status_dict)
-                   Returns (None, status_dict) if no frame available.
-        """
-        if not self.running or self.vs is None:
-            return None, self.get_status()
-
-        frame = self.vs.read()
-
-        if frame is None:
-            return None, self.get_status()
-
+    def _run_detection(self, frame):
+        """Core detection logic: runs on a BGR frame, returns (jpeg_bytes, status_dict)."""
         frame = cv2.resize(frame, (800, 450))
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         rects = self.detector(gray, 0)
@@ -224,12 +211,49 @@ class DrowsinessDetector:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
             )
 
-        # Encode frame as JPEG
+        # Encode annotated frame as JPEG
         ret, jpeg = cv2.imencode('.jpg', frame)
         if not ret:
             return None, self.get_status()
 
         return jpeg.tobytes(), self.get_status()
+
+    def process_frame(self):
+        """Process a single frame from the local server VideoStream.
+
+        Returns:
+            tuple: (annotated_frame_as_jpeg_bytes, status_dict)
+        """
+        if not self.running or self.vs is None:
+            return None, self.get_status()
+
+        frame = self.vs.read()
+        if frame is None:
+            return None, self.get_status()
+
+        return self._run_detection(frame)
+
+    def process_external_frame(self, jpeg_bytes):
+        """Process a JPEG frame uploaded from the browser (cloud / remote mode).
+
+        The browser captures its own webcam via getUserMedia, encodes each
+        frame as JPEG, and POSTs it here. The server runs dlib detection and
+        returns the annotated frame so the browser can display it.
+
+        Args:
+            jpeg_bytes: Raw JPEG bytes of the frame from the browser.
+
+        Returns:
+            tuple: (annotated_frame_as_jpeg_bytes, status_dict)
+        """
+        nparr = np.frombuffer(jpeg_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if frame is None:
+            return None, self.get_status()
+
+        return self._run_detection(frame)
+
 
     def get_status(self):
         """Return the current detection status as a dict."""

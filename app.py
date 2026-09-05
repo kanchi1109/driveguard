@@ -50,6 +50,36 @@ def status():
     return jsonify(detector.get_status())
 
 
+@app.route("/process_frame", methods=["POST"])
+def process_frame_route():
+    """Accept a JPEG frame from the browser, run detection, return annotated frame.
+
+    Browser sends: { "frame": "data:image/jpeg;base64,..." }
+    Server returns: { "frame": "data:image/jpeg;base64,...", "status": {...} }
+    """
+    import base64
+
+    data = request.get_json(silent=True) or {}
+    frame_data = data.get("frame", "")
+
+    # Strip the data URI prefix (data:image/jpeg;base64,...)
+    if "," in frame_data:
+        frame_data = frame_data.split(",", 1)[1]
+
+    try:
+        jpeg_bytes = base64.b64decode(frame_data)
+    except Exception:
+        return jsonify({"error": "Invalid frame data", "status": detector.get_status()}), 400
+
+    annotated, status_dict = detector.process_external_frame(jpeg_bytes)
+
+    if annotated is None:
+        return jsonify({"frame": None, "status": status_dict})
+
+    annotated_b64 = "data:image/jpeg;base64," + base64.b64encode(annotated).decode("utf-8")
+    return jsonify({"frame": annotated_b64, "status": status_dict})
+
+
 def generate_frames():
     """Generator that yields MJPEG frames for video streaming."""
     while detector.running:
