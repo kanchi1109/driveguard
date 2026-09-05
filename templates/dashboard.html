@@ -354,11 +354,32 @@
 
             <h2>Live Camera Feed</h2>
 
-            <div class="camera">
+            <div class="camera" style="position:relative;">
 
+                <!-- Raw live feed: shown immediately when camera opens -->
+                <video
+                    id="liveVideo"
+                    autoplay
+                    playsinline
+                    muted
+                    style="
+                        position:absolute; top:0; left:0;
+                        width:100%; height:100%;
+                        object-fit:cover;
+                        display:none;
+                    ">
+                </video>
+
+                <!-- Annotated feed: overlaid once server returns processed frames -->
                 <img
                     id="cameraFeed"
-                    alt="Live Camera Feed" />
+                    alt="Annotated Feed"
+                    style="
+                        position:absolute; top:0; left:0;
+                        width:100%; height:100%;
+                        object-fit:cover;
+                        display:none;
+                    " />
 
                 <span id="cameraMessage">
                     📷 Camera is OFF
@@ -642,11 +663,11 @@
 
             try {
 
-                /* Get the selected device ID from the dropdown */
+                /* Get the selected device ID */
                 const deviceId = document.getElementById("camSelect").value;
                 const videoConstraints = deviceId
                     ? { deviceId: { exact: deviceId } }
-                    : true;
+                    : { facingMode: "user" };
 
                 /* Open browser webcam */
                 cameraStream = await navigator.mediaDevices.getUserMedia({
@@ -654,43 +675,48 @@
                     audio: false
                 });
 
-                /* Hidden video element to grab frames from */
-                browserVideo = document.createElement("video");
-                browserVideo.srcObject  = cameraStream;
-                browserVideo.autoplay   = true;
-                browserVideo.playsInline = true;
-                browserVideo.muted      = true;
-                browserVideo.style.display = "none";
-                document.body.appendChild(browserVideo);
+                /* Wire the stream to the in-DOM #liveVideo element */
+                browserVideo = document.getElementById("liveVideo");
+                browserVideo.srcObject = cameraStream;
+
+                /* Show the raw live feed immediately */
+                const message = document.getElementById("cameraMessage");
+                browserVideo.style.display = "block";
+                message.style.display      = "none";
 
                 /* Offscreen canvas for JPEG encoding */
-                captureCanvas = document.createElement("canvas");
-                captureCanvas.width  = 640;
-                captureCanvas.height = 360;
-
-                /* Show the <img> feed (will be filled by annotated frames) */
-                const feed    = document.getElementById("cameraFeed");
-                const message = document.getElementById("cameraMessage");
-                feed.style.display    = "block";
-                message.style.display = "none";
+                captureCanvas          = document.createElement("canvas");
+                captureCanvas.width    = 640;
+                captureCanvas.height   = 360;
 
                 /* Update buttons & selector */
-                document.getElementById("startBtn").disabled         = true;
-                document.getElementById("stopBtn").disabled          = false;
-                document.getElementById("camSelect").disabled        = true;
-                document.getElementById("refreshCamsBtn").disabled   = true;
+                document.getElementById("startBtn").disabled       = true;
+                document.getElementById("stopBtn").disabled        = false;
+                document.getElementById("camSelect").disabled      = true;
+                document.getElementById("refreshCamsBtn").disabled = true;
 
                 /* Update status indicator */
-                document.getElementById("status").innerText     = "MONITORING";
-                document.getElementById("statusDot").className  = "dot active";
+                document.getElementById("status").innerText    = "MONITORING";
+                document.getElementById("statusDot").className = "dot active";
 
-                /* Wait a moment for the video to start, then begin frame loop */
-                await new Promise(r => setTimeout(r, 600));
-                frameInterval = setInterval(captureAndProcess, 100);  /* 10 fps */
+                /* Wait for the video to actually produce a frame before processing */
+                await new Promise(resolve => {
+                    if (browserVideo.readyState >= 2) {
+                        resolve();
+                    } else {
+                        browserVideo.addEventListener("canplay", resolve, { once: true });
+                    }
+                });
+
+                /* Start frame capture & upload loop at 10 fps */
+                frameInterval = setInterval(captureAndProcess, 100);
 
             } catch (error) {
                 console.error("Camera Error:", error);
-                alert("Could not access your camera.\nPlease allow camera permission in your browser and try again.");
+                alert(
+                    "Could not access your camera.\n" +
+                    "Please allow camera permission in your browser and try again."
+                );
             }
         }
 
@@ -701,18 +727,31 @@
 
         async function captureAndProcess() {
 
-            /* Skip if previous request is still in-flight or video isn't ready */
-            if (isSending || !browserVideo || browserVideo.readyState < 2) return;
+            /* Skip if a request is already in-flight */
+            if (isSending) return;
+
+            /* Skip if the video has no dimensions yet (still loading) */
+            if (!browserVideo ||
+                browserVideo.videoWidth === 0 ||
+                browserVideo.readyState < 2) return;
+
             isSending = true;
 
             try {
 
-                /* Draw current video frame onto the offscreen canvas */
-                const ctx = captureCanvas.getContext("2d");
-                ctx.drawImage(browserVideo, 0, 0, captureCanvas.width, captureCanvas.height);
+                /* Match canvas size to actual video dimensions */
+                if (captureCanvas.width  !== browserVideo.videoWidth ||
+                    captureCanvas.height !== browserVideo.videoHeight) {
+                    captureCanvas.width  = browserVideo.videoWidth;
+                    captureCanvas.height = browserVideo.videoHeight;
+                }
 
-                /* Encode as JPEG (quality 0.75 keeps upload size small) */
-                const frameData = captureCanvas.toDataURL("image/jpeg", 0.75);
+                /* Draw current frame onto canvas */
+                const ctx = captureCanvas.getContext("2d");
+                ctx.drawImage(browserVideo, 0, 0);
+
+                /* Encode as JPEG */
+                const frameData = captureCanvas.toDataURL("image/jpeg", 0.8);
 
                 /* POST to server for dlib detection */
                 const response = await fetch("/process_frame", {
@@ -723,12 +762,14 @@
 
                 const data = await response.json();
 
-                /* Display the annotated frame returned by the server */
+                /* Overlay the annotated frame on top of the live video */
                 if (data.frame) {
-                    document.getElementById("cameraFeed").src = data.frame;
+                    const annotated = document.getElementById("cameraFeed");
+                    annotated.src          = data.frame;
+                    annotated.style.display = "block";
                 }
 
-                /* Update all dashboard metrics from the status */
+                /* Update all dashboard metrics */
                 updateDashboard(data.status);
 
             } catch (err) {
@@ -757,17 +798,22 @@
                 cameraStream = null;
             }
 
+            /* Reset browserVideo — don't remove it, it's a permanent DOM element */
             if (browserVideo) {
-                browserVideo.remove();
+                browserVideo.srcObject     = null;
+                browserVideo.style.display = "none";
                 browserVideo = null;
             }
 
-            /* Hide the feed */
+            /* Hide both feeds, show the OFF message */
             const feed    = document.getElementById("cameraFeed");
+            const liveVid = document.getElementById("liveVideo");
             const message = document.getElementById("cameraMessage");
             feed.src              = "";
             feed.style.display    = "none";
+            liveVid.style.display = "none";
             message.style.display = "block";
+
 
             /* Restore buttons */
             document.getElementById("startBtn").disabled       = false;
