@@ -1,6 +1,11 @@
 # DriveGuard 🚗👁️
 **AI-Powered Real-Time Driver Drowsiness and Alertness Monitoring System**
 
+[![Live Demo](https://img.shields.io/badge/Live_Demo-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://driveguard-lrdm.onrender.com/)
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/kanchi1109/driveguard)
+
+🌐 **Live Deployment:** [https://driveguard-lrdm.onrender.com/](https://driveguard-lrdm.onrender.com/)
+
 DriveGuard is a computer-vision safety application designed to detect driver drowsiness and fatigue in real time. It monitors facial landmarks using OpenCV and dlib, calculates the Eye Aspect Ratio (EAR) and lip distance, and sounds customizable audible alerts directly through a web dashboard.
 
 ---
