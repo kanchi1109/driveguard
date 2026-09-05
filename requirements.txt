@@ -4,3 +4,4 @@ scipy
 imutils
 numpy
 dlib-bin
+gunicorn
