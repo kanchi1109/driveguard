@@ -576,12 +576,38 @@
     <script>
 
         /* =============================================
+           MODE DETECTION
+           LOCAL  → server reads webcam → MJPEG stream (zero lag, fast)
+           CLOUD  → browser captures webcam → POST frames to server
+           ============================================= */
+
+        const IS_LOCAL = (
+            location.hostname === "localhost" ||
+            location.hostname === "127.0.0.1"
+        );
+
+        /* Show a badge so user knows which mode is active */
+        window.addEventListener("load", () => {
+            const badge = document.createElement("div");
+            badge.style.cssText = `
+                position:fixed; bottom:12px; right:12px; z-index:9999;
+                background:${IS_LOCAL ? "#10b981" : "#6366f1"};
+                color:#fff; font-size:12px; font-weight:600;
+                padding:5px 10px; border-radius:20px; opacity:0.85;
+            `;
+            badge.textContent = IS_LOCAL ? "⚡ Local Mode" : "☁️ Cloud Mode";
+            document.body.appendChild(badge);
+        });
+
+
+        /* =============================================
            STATE
            ============================================= */
 
         let cameraStream   = null;   // MediaStream from getUserMedia
-        let browserVideo   = null;   // Hidden <video> element for capture
+        let browserVideo   = null;   // In-DOM video element for capture
         let captureCanvas  = null;   // Offscreen canvas for frame grab
+
         let frameInterval  = null;   // setInterval handle for frame loop
         let alarmPlaying   = false;
         let currentAlarm   = null;
@@ -656,124 +682,138 @@
 
 
         /* =============================================
-           START MONITORING
+           START MONITORING  — routes to local or cloud mode
            ============================================= */
 
         async function startMonitoring() {
+            if (IS_LOCAL) {
+                await startLocal();
+            } else {
+                await startCloud();
+            }
+        }
 
+
+        /* ---- LOCAL MODE: server reads webcam → MJPEG stream ---- */
+
+        async function startLocal() {
             try {
+                const camIndex = parseInt(
+                    document.getElementById("camSelect").value || "0"
+                );
 
-                /* Get the selected device ID */
+                /* Tell the server to open the webcam */
+                const res  = await fetch("/start", {
+                    method:  "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body:    JSON.stringify({ cam_index: camIndex })
+                });
+                const data = await res.json();
+                if (!data.running) { alert("Failed to start camera on server."); return; }
+
+                /* Show the MJPEG stream directly — zero per-frame lag */
+                const feed    = document.getElementById("cameraFeed");
+                const message = document.getElementById("cameraMessage");
+                feed.src           = "/video_feed";
+                feed.style.display = "block";
+                message.style.display = "none";
+
+                _setMonitoringUI(true);
+
+                /* Poll /status every 300ms for metrics (lightweight) */
+                frameInterval = setInterval(pollStatusLocal, 300);
+
+            } catch (e) {
+                console.error("Local start error:", e);
+                alert("Could not start local monitoring.");
+            }
+        }
+
+        async function pollStatusLocal() {
+            try {
+                const res  = await fetch("/status");
+                const data = await res.json();
+                updateDashboard(data);
+            } catch (e) { /* ignore transient errors */ }
+        }
+
+
+        /* ---- CLOUD MODE: browser captures webcam → POST frames to server ---- */
+
+        async function startCloud() {
+            try {
                 const deviceId = document.getElementById("camSelect").value;
                 const videoConstraints = deviceId
                     ? { deviceId: { exact: deviceId } }
                     : { facingMode: "user" };
 
-                /* Open browser webcam */
                 cameraStream = await navigator.mediaDevices.getUserMedia({
                     video: videoConstraints,
                     audio: false
                 });
 
-                /* Wire the stream to the in-DOM #liveVideo element */
+                /* Wire stream to in-DOM video element — shows live feed immediately */
                 browserVideo = document.getElementById("liveVideo");
                 browserVideo.srcObject = cameraStream;
-
-                /* Show the raw live feed immediately */
-                const message = document.getElementById("cameraMessage");
                 browserVideo.style.display = "block";
-                message.style.display      = "none";
+                document.getElementById("cameraMessage").style.display = "none";
 
-                /* Offscreen canvas for JPEG encoding */
-                captureCanvas          = document.createElement("canvas");
-                captureCanvas.width    = 640;
-                captureCanvas.height   = 360;
+                captureCanvas        = document.createElement("canvas");
 
-                /* Update buttons & selector */
-                document.getElementById("startBtn").disabled       = true;
-                document.getElementById("stopBtn").disabled        = false;
-                document.getElementById("camSelect").disabled      = true;
-                document.getElementById("refreshCamsBtn").disabled = true;
+                _setMonitoringUI(true);
 
-                /* Update status indicator */
-                document.getElementById("status").innerText    = "MONITORING";
-                document.getElementById("statusDot").className = "dot active";
-
-                /* Wait for the video to actually produce a frame before processing */
+                /* Wait for first real frame */
                 await new Promise(resolve => {
-                    if (browserVideo.readyState >= 2) {
-                        resolve();
-                    } else {
-                        browserVideo.addEventListener("canplay", resolve, { once: true });
-                    }
+                    if (browserVideo.readyState >= 2) resolve();
+                    else browserVideo.addEventListener("canplay", resolve, { once: true });
                 });
 
-                /* Start frame capture & upload loop at 10 fps */
-                frameInterval = setInterval(captureAndProcess, 100);
+                frameInterval = setInterval(captureAndProcess, 100);  /* 10 fps */
 
-            } catch (error) {
-                console.error("Camera Error:", error);
-                alert(
-                    "Could not access your camera.\n" +
-                    "Please allow camera permission in your browser and try again."
-                );
+            } catch (e) {
+                console.error("Cloud camera error:", e);
+                alert("Could not access camera.\nPlease allow camera permission and try again.");
             }
         }
 
 
         /* =============================================
-           FRAME CAPTURE & UPLOAD LOOP
+           FRAME CAPTURE & UPLOAD LOOP  (cloud only)
            ============================================= */
 
         async function captureAndProcess() {
-
-            /* Skip if a request is already in-flight */
             if (isSending) return;
-
-            /* Skip if the video has no dimensions yet (still loading) */
-            if (!browserVideo ||
-                browserVideo.videoWidth === 0 ||
-                browserVideo.readyState < 2) return;
+            if (!browserVideo || browserVideo.videoWidth === 0 || browserVideo.readyState < 2) return;
 
             isSending = true;
-
             try {
-
-                /* Match canvas size to actual video dimensions */
-                if (captureCanvas.width  !== browserVideo.videoWidth ||
+                /* Sync canvas size to actual camera resolution */
+                if (captureCanvas.width !== browserVideo.videoWidth ||
                     captureCanvas.height !== browserVideo.videoHeight) {
                     captureCanvas.width  = browserVideo.videoWidth;
                     captureCanvas.height = browserVideo.videoHeight;
                 }
 
-                /* Draw current frame onto canvas */
-                const ctx = captureCanvas.getContext("2d");
-                ctx.drawImage(browserVideo, 0, 0);
-
-                /* Encode as JPEG */
+                captureCanvas.getContext("2d").drawImage(browserVideo, 0, 0);
                 const frameData = captureCanvas.toDataURL("image/jpeg", 0.8);
 
-                /* POST to server for dlib detection */
                 const response = await fetch("/process_frame", {
                     method:  "POST",
                     headers: { "Content-Type": "application/json" },
                     body:    JSON.stringify({ frame: frameData })
                 });
-
                 const data = await response.json();
 
-                /* Overlay the annotated frame on top of the live video */
                 if (data.frame) {
                     const annotated = document.getElementById("cameraFeed");
                     annotated.src          = data.frame;
                     annotated.style.display = "block";
                 }
 
-                /* Update all dashboard metrics */
                 updateDashboard(data.status);
 
             } catch (err) {
-                console.error("Frame processing error:", err);
+                console.error("Frame error:", err);
             } finally {
                 isSending = false;
             }
@@ -781,55 +821,54 @@
 
 
         /* =============================================
-           STOP MONITORING
+           STOP MONITORING  — handles both modes
            ============================================= */
 
         async function stopMonitoring() {
 
-            /* Stop the frame loop */
-            if (frameInterval) {
-                clearInterval(frameInterval);
-                frameInterval = null;
-            }
+            if (frameInterval) { clearInterval(frameInterval); frameInterval = null; }
 
-            /* Release the browser camera */
+            /* Cloud: release browser camera */
             if (cameraStream) {
                 cameraStream.getTracks().forEach(t => t.stop());
                 cameraStream = null;
             }
-
-            /* Reset browserVideo — don't remove it, it's a permanent DOM element */
             if (browserVideo) {
                 browserVideo.srcObject     = null;
                 browserVideo.style.display = "none";
                 browserVideo = null;
             }
 
-            /* Hide both feeds, show the OFF message */
+            /* Hide all feeds */
             const feed    = document.getElementById("cameraFeed");
             const liveVid = document.getElementById("liveVideo");
             const message = document.getElementById("cameraMessage");
-            feed.src              = "";
-            feed.style.display    = "none";
+            feed.src = ""; feed.style.display = "none";
             liveVid.style.display = "none";
             message.style.display = "block";
 
+            _setMonitoringUI(false);
 
-            /* Restore buttons */
-            document.getElementById("startBtn").disabled       = false;
-            document.getElementById("stopBtn").disabled        = true;
-            document.getElementById("camSelect").disabled      = false;
-            document.getElementById("refreshCamsBtn").disabled = false;
-
-            /* Reset status */
             const statusText = document.getElementById("status");
-            statusText.innerText    = "STOPPED";
-            statusText.style.color  = "white";
+            statusText.innerText   = "STOPPED";
+            statusText.style.color = "white";
             document.getElementById("statusDot").className = "dot";
             document.getElementById("alertBox").className  = "alert-box";
 
-            /* Tell the server to clean up (optional — no-op if already stopped) */
             await fetch("/stop", { method: "POST" }).catch(() => {});
+        }
+
+
+        /* Shared UI helper: enable/disable buttons & status dot */
+        function _setMonitoringUI(active) {
+            document.getElementById("startBtn").disabled       = active;
+            document.getElementById("stopBtn").disabled        = !active;
+            document.getElementById("camSelect").disabled      = active;
+            document.getElementById("refreshCamsBtn").disabled = active;
+            if (active) {
+                document.getElementById("status").innerText    = "MONITORING";
+                document.getElementById("statusDot").className = "dot active";
+            }
         }
 
 

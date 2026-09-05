@@ -37,6 +37,13 @@ class DrowsinessDetector:
         self.is_drowsy = False
         self.is_yawning = False
 
+        # Frame-skip optimisation: run dlib detection every N frames,
+        # reuse cached results for in-between frames.
+        self._frame_count    = 0
+        self._detect_every   = 2          # run dlib every 2nd frame
+        self._cached_rects   = []         # last detected face rects
+        self._cached_shapes  = []         # last detected landmark arrays
+
         # Detection log (last 20 events)
         self.detection_log = []
 
@@ -132,13 +139,27 @@ class DrowsinessDetector:
 
     def _run_detection(self, frame):
         """Core detection logic: runs on a BGR frame, returns (jpeg_bytes, status_dict)."""
-        frame = cv2.resize(frame, (800, 450))
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        rects = self.detector(gray, 0)
+        # ---- Resize smaller for faster dlib detection ----
+        frame = cv2.resize(frame, (640, 360))
+        gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        for rect in rects:
-            shape = self.predictor(gray, rect)
-            shape = face_utils.shape_to_np(shape)
+        # ---- CLAHE: improve contrast for dim/indoor lighting ----
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray  = clahe.apply(gray)
+
+        # ---- Frame-skip: run dlib only every N frames ----
+        self._frame_count += 1
+        if self._frame_count % self._detect_every == 0:
+            self._cached_rects  = self.detector(gray, 0)
+            self._cached_shapes = [
+                face_utils.shape_to_np(self.predictor(gray, r))
+                for r in self._cached_rects
+            ]
+
+        rects  = self._cached_rects
+        shapes = self._cached_shapes
+
+        for shape in shapes:
 
             # ----- Eye detection -----
             leftEye = shape[self.lStart:self.lEnd]

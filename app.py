@@ -81,10 +81,21 @@ def process_frame_route():
 
 
 def generate_frames():
-    """Generator that yields MJPEG frames for video streaming."""
+    """Generator that yields MJPEG frames capped at ~30 fps."""
+    import time
+    frame_interval = 1.0 / 30          # 33ms per frame → 30 fps max
+    last_frame_time = 0
+
     while detector.running:
+        now = time.time()
+        elapsed = now - last_frame_time
+
+        if elapsed < frame_interval:
+            time.sleep(frame_interval - elapsed)
+
         frame_bytes, _ = detector.process_frame()
         if frame_bytes is not None:
+            last_frame_time = time.time()
             yield (
                 b'--frame\r\n'
                 b'Content-Type: image/jpeg\r\n\r\n' +
